@@ -1,0 +1,14 @@
+{
+  "name": "statuspulse-monitor-worker",
+  "version": "1.0.0",
+  "description": "StatusPulse monitoring engine on Cloudflare Workers",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "statuspulse-monitor",
+  "main": "src/index.js",
+  "compatibility_date": "2025-01-01",
+
+  // Cron Triggers: every 5 minutes (free tier)
+  // Change to "*/1 * * * *" for 1-minute checks on paid plan
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
+
+  // Environment variables (secrets should be set via `wrangler secret put`)
+  // wrangler secret put SUPABASE_URL
+  // wrangler secret put SUPABASE_SERVICE_KEY
+  "vars": {
+    "ENVIRONMENT": "production"
+  },
+
+  // CPU time limit (10ms on free, increase on paid)
+  "limits": {
+    "cpu_ms": 10000
+  },
+
+  // Production environment override
+  "env": {
+    "staging": {
+      "vars": {
+        "ENVIRONMENT": "staging"
+      },
+      "triggers": {
+        "crons": [
+          "0 * * * *"
+        ]
+      }
+    }
+  }
+}
