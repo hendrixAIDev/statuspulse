@@ -125,32 +125,26 @@ def main():
             .eq("is_public", True)\
             .single()\
             .execute()
-    except:
+    except Exception as e:
         page = None
+        if slug != "demo":
+            st.error(f"Could not load status page: {e}")
     
     if not page or not page.data:
-        # Demo mode — show all monitors from the system
+        # No matching status page found — show a not-found message
         st.markdown("""
         <div class="status-header">
             <h1>📡 StatusPulse</h1>
-            <p style="color: #6B7280;">System Status</p>
+            <p style="color: #6B7280;">Status Page Not Found</p>
         </div>
         """, unsafe_allow_html=True)
-        
-        # Get all monitors (demo mode)
-        try:
-            monitors = sb.table("monitors")\
-                .select("*")\
-                .eq("is_active", True)\
-                .execute()
-        except:
-            monitors = None
-        
-        if not monitors or not monitors.data:
-            st.info("No monitors configured yet.")
-            return
-        
-        monitor_list = monitors.data
+        st.info("The requested status page does not exist or is not public. Check the URL and try again.")
+        st.markdown("""
+        <div style="text-align:center; padding: 40px 0 20px; color: #9CA3AF; font-size: 0.8rem;">
+            <p>Powered by <a href="https://hendrixaidev.github.io" target="_blank">StatusPulse</a> ⚡</p>
+        </div>
+        """, unsafe_allow_html=True)
+        return
     else:
         # Configured status page
         st.markdown(f"""
@@ -222,7 +216,7 @@ def main():
                 .order("checked_at")\
                 .execute()
             check_data = checks.data or []
-        except:
+        except Exception:
             check_data = []
         
         # Calculate uptime
@@ -268,8 +262,8 @@ def main():
                 
                 started = inc["started_at"][:16].replace("T", " ")
                 st.markdown(f"- {resolved} **{name}** — {started} UTC{duration}")
-    except:
-        pass
+    except Exception:
+        pass  # Incidents section is non-critical; fail silently
     
     # Footer
     st.markdown("""

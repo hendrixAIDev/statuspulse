@@ -12,7 +12,6 @@ import os
 import base64
 import json
 import hashlib
-import bcrypt
 from supabase import create_client, Client
 
 # ─── Page Config ────────────────────────────────────────────────────────────
@@ -586,7 +585,7 @@ def page_dashboard(session: dict):
                             last_check = f"{int(elapsed/60)}m ago"
                         else:
                             last_check = f"{int(elapsed/3600)}h ago"
-                    except:
+                    except (ValueError, TypeError):
                         pass
                 st.markdown(f"Last check: **{last_check}**")
             

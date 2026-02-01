@@ -68,17 +68,20 @@ export default {
       });
     }
     
-    // Current status (public read-only)
+    // Current status (public read-only, returns only monitor names and status — no URLs)
     if (url.pathname === '/status' && request.method === 'GET') {
       const monitors = await getActiveMonitors(env);
       const summary = monitors.map(m => ({
         name: m.name,
-        url: m.url,
         status: m.current_status,
         last_checked: m.last_checked_at
       }));
       return new Response(JSON.stringify({ monitors: summary }), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'public, max-age=60'
+        }
       });
     }
     
@@ -125,13 +128,13 @@ async function checkUrl(url, method = 'GET', expectedStatus = 200, timeoutMs = 3
   };
   
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const abortCtrl = new AbortController();
+    const timeoutId = setTimeout(() => abortCtrl.abort(), timeoutMs);
     
     const start = Date.now();
     const response = await fetch(url, {
       method: method === 'HEAD' ? 'HEAD' : method === 'POST' ? 'POST' : 'GET',
-      signal: controller.signal,
+      signal: abortCtrl.signal,
       redirect: 'follow',
       headers: {
         'User-Agent': 'StatusPulse/1.0 (https://statuspulse.dev)'
