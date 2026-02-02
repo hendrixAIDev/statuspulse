@@ -19,10 +19,8 @@
     "ENVIRONMENT": "production"
   },
 
-  // CPU time limit (10ms on free, increase on paid)
-  "limits": {
-    "cpu_ms": 10000
-  },
+  // CPU time limit — removed for free plan compatibility
+  // "limits": { "cpu_ms": 10000 },
 
   // Production environment override
   "env": {

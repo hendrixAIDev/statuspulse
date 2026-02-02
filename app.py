@@ -219,6 +219,31 @@ def add_monitor(user_id: str, name: str, url: str, method: str = "GET",
     return {"success": False, "error": "Failed to create monitor"}
 
 
+def update_monitor(monitor_id: str, name: str, url: str, method: str = "GET",
+                   expected_status: int = 200, check_interval_seconds: int = 300,
+                   timeout_seconds: int = 30):
+    """Update an existing monitor's settings."""
+    sb = get_supabase()
+    
+    # Validate URL
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    
+    result = sb.table("monitors").update({
+        "name": name,
+        "url": url,
+        "method": method,
+        "expected_status": expected_status,
+        "check_interval_seconds": check_interval_seconds,
+        "timeout_seconds": timeout_seconds,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }).eq("id", monitor_id).execute()
+    
+    if result.data:
+        return {"success": True, "monitor": result.data[0]}
+    return {"success": False, "error": "Failed to update monitor"}
+
+
 def delete_monitor(monitor_id: str):
     """Delete a monitor and its related data."""
     sb = get_supabase()
@@ -612,7 +637,7 @@ def page_dashboard(session: dict):
                     st.markdown(f"- {resolved} — Started {inc['started_at'][:19]}{duration}")
             
             # Actions
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 if st.button("🔍 Check Now", key=f"check_{monitor['id']}"):
                     with st.spinner("Checking..."):
@@ -624,6 +649,14 @@ def page_dashboard(session: dict):
                                 st.error(f"🔴 DOWN — {result.get('error_message', 'Unknown error')}")
                         st.rerun()
             with col2:
+                # Edit monitor
+                edit_key = f"edit_mode_{monitor['id']}"
+                if edit_key not in st.session_state:
+                    st.session_state[edit_key] = False
+                if st.button("✏️ Edit", key=f"edit_{monitor['id']}"):
+                    st.session_state[edit_key] = not st.session_state[edit_key]
+                    st.rerun()
+            with col3:
                 # Toggle active/paused
                 is_active = monitor["is_active"]
                 label = "⏸️ Pause" if is_active else "▶️ Resume"
@@ -635,11 +668,92 @@ def page_dashboard(session: dict):
                         "current_status": new_status
                     }).eq("id", monitor["id"]).execute()
                     st.rerun()
-            with col3:
-                if st.button("🗑️ Delete", key=f"delete_{monitor['id']}"):
-                    delete_monitor(monitor["id"])
-                    st.success(f"Deleted {monitor['name']}")
-                    st.rerun()
+            with col4:
+                # Two-click delete confirmation
+                delete_confirm_key = f"delete_confirm_{monitor['id']}"
+                if delete_confirm_key not in st.session_state:
+                    st.session_state[delete_confirm_key] = False
+                
+                if not st.session_state[delete_confirm_key]:
+                    if st.button("🗑️ Delete", key=f"delete_{monitor['id']}"):
+                        st.session_state[delete_confirm_key] = True
+                        st.rerun()
+                else:
+                    st.warning("⚠️ Are you sure?")
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("✅ Yes", key=f"delete_yes_{monitor['id']}", use_container_width=True):
+                            delete_monitor(monitor["id"])
+                            st.session_state[delete_confirm_key] = False
+                            st.success(f"Deleted {monitor['name']}")
+                            st.rerun()
+                    with col_no:
+                        if st.button("❌ No", key=f"delete_no_{monitor['id']}", use_container_width=True):
+                            st.session_state[delete_confirm_key] = False
+                            st.rerun()
+            
+            # Edit form (shown when edit mode is active)
+            edit_key = f"edit_mode_{monitor['id']}"
+            if st.session_state.get(edit_key, False):
+                st.markdown("---")
+                st.markdown("**✏️ Edit Monitor Settings**")
+                with st.form(f"edit_form_{monitor['id']}"):
+                    edit_col1, edit_col2 = st.columns(2)
+                    with edit_col1:
+                        edit_name = st.text_input("Name", value=monitor["name"], key=f"edit_name_{monitor['id']}")
+                        edit_url = st.text_input("URL", value=monitor["url"], key=f"edit_url_{monitor['id']}")
+                        edit_method = st.selectbox(
+                            "Method", ["GET", "HEAD", "POST"],
+                            index=["GET", "HEAD", "POST"].index(monitor["method"]),
+                            key=f"edit_method_{monitor['id']}"
+                        )
+                    with edit_col2:
+                        edit_expected = st.number_input(
+                            "Expected Status", value=monitor["expected_status"],
+                            min_value=100, max_value=599,
+                            key=f"edit_expected_{monitor['id']}"
+                        )
+                        interval_options = {
+                            60: "1 minute",
+                            120: "2 minutes",
+                            300: "5 minutes",
+                            600: "10 minutes",
+                            900: "15 minutes",
+                            1800: "30 minutes",
+                            3600: "1 hour"
+                        }
+                        current_interval = monitor.get("check_interval_seconds", 300)
+                        interval_keys = list(interval_options.keys())
+                        current_idx = interval_keys.index(current_interval) if current_interval in interval_keys else 2
+                        edit_interval = st.selectbox(
+                            "Check Interval",
+                            options=interval_keys,
+                            format_func=lambda x: interval_options[x],
+                            index=current_idx,
+                            key=f"edit_interval_{monitor['id']}"
+                        )
+                        edit_timeout = st.number_input(
+                            "Timeout (seconds)", value=monitor.get("timeout_seconds", 30),
+                            min_value=5, max_value=120,
+                            key=f"edit_timeout_{monitor['id']}"
+                        )
+                    
+                    submit_col1, submit_col2 = st.columns(2)
+                    with submit_col1:
+                        if st.form_submit_button("💾 Save Changes", use_container_width=True):
+                            if edit_name and edit_url:
+                                result = update_monitor(
+                                    monitor["id"], edit_name, edit_url, edit_method,
+                                    edit_expected, edit_interval, edit_timeout
+                                )
+                                if result["success"]:
+                                    st.session_state[edit_key] = False
+                                    st.success("✅ Monitor updated!")
+                                    st.rerun()
+                                else:
+                                    st.error(result["error"])
+                            else:
+                                st.warning("Name and URL are required")
 
 
 # ─── Public Status Page ─────────────────────────────────────────────────────
