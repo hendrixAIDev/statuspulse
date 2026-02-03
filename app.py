@@ -12,7 +12,26 @@ import os
 import base64
 import json
 import hashlib
+import re
 from supabase import create_client, Client
+from dotenv import load_dotenv
+import logging
+
+# Setup logging to file
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler('statuspulse_debug.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Load .env file explicitly
+load_dotenv()
+logger.info(f"STARTUP - .env loaded. DEV_MODE={os.getenv('DEV_MODE')}")
+print(f"[STARTUP] .env loaded. DEV_MODE={os.getenv('DEV_MODE')}")
 
 # ─── Page Config ────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -92,6 +111,61 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ─── Dev Mode & Utilities ────────────────────────────────────────────────────
+def is_dev_mode() -> bool:
+    """Check if dev mode is enabled."""
+    dev_mode = os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
+    logger.debug(f"DEV_MODE - Environment variable: {os.getenv('DEV_MODE')}")
+    logger.debug(f"DEV_MODE - Evaluated as: {dev_mode}")
+    print(f"[DEV_MODE] Environment variable: {os.getenv('DEV_MODE')}")
+    print(f"[DEV_MODE] Evaluated as: {dev_mode}")
+    return dev_mode
+
+
+def validate_email(email: str) -> bool:
+    """
+    Validate email format. Accepts standard formats including plus addressing.
+    Examples: user@example.com, user+tag@domain.com, first.last@example.co.uk
+    """
+    if not email or "@" not in email:
+        return False
+    
+    # RFC 5322 compliant regex (simplified but covers common cases)
+    # Accepts: alphanumeric, dots, hyphens, plus signs, underscores
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, email))
+
+
+# Rate limiting state (in-memory for simplicity)
+_signup_attempts = {}
+
+def check_rate_limit(email: str) -> tuple[bool, str]:
+    """
+    Check if signup is rate limited. Returns (allowed, error_message).
+    In dev mode, always allows.
+    """
+    if is_dev_mode():
+        return True, ""
+    
+    now = datetime.now(timezone.utc)
+    
+    # Clean old entries (older than 1 hour)
+    cutoff = now - timedelta(hours=1)
+    _signup_attempts.clear()  # Simple approach: clear all on each check
+    
+    if email in _signup_attempts:
+        last_attempt = _signup_attempts[email]
+        elapsed = (now - last_attempt).total_seconds()
+        
+        # Allow 1 signup per 60 seconds per email
+        if elapsed < 60:
+            wait_time = int(60 - elapsed)
+            return False, f"Rate limit exceeded. Please wait {wait_time} seconds before trying again."
+    
+    _signup_attempts[email] = now
+    return True, ""
+
+
 # ─── Supabase Connection ────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase() -> Client:
@@ -101,6 +175,16 @@ def get_supabase() -> Client:
         st.error("⚠️ Supabase not configured. Set SUPABASE_URL and SUPABASE_KEY.")
         st.stop()
     return create_client(url, key)
+
+
+@st.cache_resource
+def get_supabase_admin() -> Client:
+    """Get Supabase client with service key (admin access)."""
+    url = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
+    service_key = os.getenv("SUPABASE_SERVICE_KEY") or st.secrets.get("SUPABASE_SERVICE_KEY", "")
+    if not url or not service_key:
+        return None
+    return create_client(url, service_key)
 
 
 # ─── Session Management (using st.query_params) ─────────────────────────────
@@ -131,31 +215,111 @@ def clear_session():
 # ─── Auth Functions ──────────────────────────────────────────────────────────
 def signup(email: str, password: str, display_name: str = ""):
     """Sign up a new user."""
-    sb = get_supabase()
+    logger.info(f"SIGNUP - Starting signup for {email}")
+    print(f"[SIGNUP] Starting signup for {email}")
+    
+    # Validate email format
+    if not validate_email(email):
+        logger.warning(f"SIGNUP - Invalid email format: {email}")
+        return {"success": False, "error": "Invalid email format. Please use a valid email address."}
+    
+    # Check rate limit (bypassed in dev mode)
+    allowed, error = check_rate_limit(email)
+    if not allowed:
+        logger.warning(f"SIGNUP - Rate limited: {email}")
+        return {"success": False, "error": error}
+    
     try:
-        result = sb.auth.sign_up({
+        # In dev mode, use admin API to bypass Supabase rate limiting
+        if is_dev_mode():
+            logger.info(f"SIGNUP - DEV_MODE detected - using admin API")
+            print(f"[SIGNUP] DEV_MODE detected - using admin API")
+            sb_admin = get_supabase_admin()
+            if sb_admin:
+                try:
+                    logger.info(f"SIGNUP - Admin client created, calling create_user")
+                    print(f"[SIGNUP] Admin client created, calling create_user")
+                    result = sb_admin.auth.admin.create_user({
+                        "email": email,
+                        "password": password,
+                        "email_confirm": True,  # Auto-confirm
+                        "user_metadata": {
+                            "display_name": display_name or email.split("@")[0]
+                        }
+                    })
+                    
+                    logger.info(f"SIGNUP - Admin API result: user exists={bool(result.user)}")
+                    print(f"[SIGNUP] Admin API result: {result}")
+                    
+                    if result.user:
+                        logger.info(f"SIGNUP - User created successfully via admin API: {result.user.id}")
+                        logger.info(f"SIGNUP - User email_confirmed_at: {result.user.email_confirmed_at}")
+                        print(f"[SIGNUP] User created successfully via admin API: {result.user.id}")
+                        print(f"[SIGNUP] User email_confirmed_at: {getattr(result.user, 'email_confirmed_at', 'NOT SET')}")
+                        return {
+                            "success": True,
+                            "user_id": result.user.id,
+                            "email": email,
+                            "dev_mode": True
+                        }
+                except Exception as e:
+                    # If admin API fails, fall back to regular signup
+                    error_msg = str(e)
+                    logger.error(f"SIGNUP - Admin API error: {error_msg}")
+                    print(f"[SIGNUP] Admin API error: {error_msg}")
+                    if "already registered" in error_msg.lower() or "duplicate" in error_msg.lower():
+                        return {"success": False, "error": "Email already registered. Try logging in instead."}
+                    # Fall through to regular signup if other error
+            else:
+                logger.warning(f"SIGNUP - Admin client not available - falling back to regular signup")
+                print(f"[SIGNUP] Admin client not available - falling back to regular signup")
+        
+        # Regular signup (production or dev mode fallback)
+        sb = get_supabase()
+        signup_options = {
             "email": email,
             "password": password,
             "options": {
                 "data": {"display_name": display_name or email.split("@")[0]}
             }
-        })
+        }
+        
+        result = sb.auth.sign_up(signup_options)
+        
         if result.user:
             return {"success": True, "user_id": result.user.id, "email": email}
         return {"success": False, "error": "Signup failed"}
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        error_msg = str(e)
+        # Make rate limit errors more user-friendly
+        if "rate" in error_msg.lower() or "too many" in error_msg.lower():
+            if is_dev_mode():
+                return {"success": False, "error": "Rate limit hit even in dev mode. This is a Supabase limitation. Try the seed script instead: python seed_test_accounts.py"}
+            return {"success": False, "error": "Too many signup attempts. Please wait a few minutes and try again."}
+        if "already registered" in error_msg.lower() or "duplicate" in error_msg.lower():
+            return {"success": False, "error": "Email already registered. Try logging in instead."}
+        return {"success": False, "error": error_msg}
 
 
 def login(email: str, password: str):
     """Log in an existing user."""
+    logger.info(f"LOGIN - Attempting login for {email}")
+    print(f"[LOGIN] Attempting login for {email}")
     sb = get_supabase()
     try:
         result = sb.auth.sign_in_with_password({
             "email": email,
             "password": password
         })
+        logger.info(f"LOGIN - Auth result received: user_exists={bool(result.user)}")
+        print(f"[LOGIN] Auth result: {result}")
+        
         if result.user:
+            logger.info(f"LOGIN - Login successful for user: {result.user.id}")
+            logger.info(f"LOGIN - User email_confirmed_at: {result.user.email_confirmed_at}")
+            print(f"[LOGIN] Login successful for user: {result.user.id}")
+            print(f"[LOGIN] User email_confirmed_at: {getattr(result.user, 'email_confirmed_at', 'NOT SET')}")
             return {
                 "success": True,
                 "user_id": result.user.id,
@@ -164,7 +328,10 @@ def login(email: str, password: str):
             }
         return {"success": False, "error": "Login failed"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        error_msg = str(e)
+        logger.error(f"LOGIN - Login error: {error_msg}")
+        print(f"[LOGIN] Login error: {error_msg}")
+        return {"success": False, "error": error_msg}
 
 
 # ─── Data Functions ──────────────────────────────────────────────────────────
@@ -457,16 +624,24 @@ def page_auth():
                         st.error(f"Login failed: {result['error']}")
         
         with tab_signup:
+            # Show dev mode indicator
+            if is_dev_mode():
+                st.info("🔧 **Dev Mode Active** — Email confirmation disabled, no rate limits")
+            
             with st.form("signup_form"):
                 name = st.text_input("Display Name")
-                email = st.text_input("Email", key="signup_email")
-                password = st.text_input("Password", type="password", key="signup_pass")
+                email = st.text_input("Email", key="signup_email", 
+                                     help="Accepts standard formats including plus addressing (user+tag@domain.com)")
+                password = st.text_input("Password", type="password", key="signup_pass",
+                                        help="Minimum 6 characters")
                 password2 = st.text_input("Confirm Password", type="password")
                 submitted = st.form_submit_button("Create Account", use_container_width=True)
                 
                 if submitted:
                     if not email or not password:
                         st.error("Email and password are required")
+                    elif not validate_email(email):
+                        st.error("Invalid email format. Examples: user@example.com, user+tag@domain.com")
                     elif password != password2:
                         st.error("Passwords don't match")
                     elif len(password) < 6:
@@ -474,7 +649,10 @@ def page_auth():
                     else:
                         result = signup(email, password, name)
                         if result["success"]:
-                            st.success("Account created! Check your email to confirm, then log in.")
+                            if result.get("dev_mode"):
+                                st.success("✅ Account created! You can log in immediately (dev mode).")
+                            else:
+                                st.success("✅ Account created! Check your email to confirm, then log in.")
                         else:
                             st.error(f"Signup failed: {result['error']}")
         

@@ -48,6 +48,33 @@ cp .env.example .env
 streamlit run app.py
 ```
 
+### Development Mode
+
+For local testing and development, enable dev mode to bypass email confirmation and rate limiting:
+
+```bash
+# In .env, set:
+DEV_MODE=true
+```
+
+**Dev mode features:**
+- ✅ Email confirmation disabled (instant signup)
+- ✅ Rate limiting disabled
+- ✅ Accepts all valid email formats (including plus addressing: `user+tag@domain.com`)
+
+**Seed test accounts:**
+```bash
+python seed_test_accounts.py              # Create test accounts
+python seed_test_accounts.py --clean     # Delete test accounts
+```
+
+**Run smoke tests:**
+```bash
+python smoke_test.py  # Full E2E test suite
+```
+
+⚠️ **Never enable dev mode in production!**
+
 ## 🏗️ Architecture
 
 ```
