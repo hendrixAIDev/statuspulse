@@ -131,11 +131,16 @@ async function checkUrl(url, method = 'GET', expectedStatus = 200, timeoutMs = 3
     const abortCtrl = new AbortController();
     const timeoutId = setTimeout(() => abortCtrl.abort(), timeoutMs);
     
+    // Use 'manual' redirect mode when we expect a redirect status (3xx).
+    // This prevents redirect loops (e.g., Streamlit Cloud's auth flow
+    // which requires cookies that Workers' fetch() doesn't maintain).
+    const isRedirectExpected = expectedStatus >= 300 && expectedStatus < 400;
+    
     const start = Date.now();
     const response = await fetch(url, {
       method: method === 'HEAD' ? 'HEAD' : method === 'POST' ? 'POST' : 'GET',
       signal: abortCtrl.signal,
-      redirect: 'follow',
+      redirect: isRedirectExpected ? 'manual' : 'follow',
       headers: {
         'User-Agent': 'StatusPulse/1.0 (https://statuspulse.dev)'
       }
