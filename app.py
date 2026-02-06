@@ -122,6 +122,41 @@ def is_dev_mode() -> bool:
     return dev_mode
 
 
+def is_test_environment() -> bool:
+    """
+    Check if we're in a test/experiment environment.
+    Returns True for: DEV_MODE=true, URL contains 'experiment', or SKIP_EMAIL_CONFIRM=true
+    """
+    # Check DEV_MODE
+    if is_dev_mode():
+        return True
+    
+    # Check for explicit skip
+    if os.getenv("SKIP_EMAIL_CONFIRM", "false").lower() in ("true", "1", "yes"):
+        return True
+    
+    # Check URL for 'experiment' (works on Streamlit Cloud)
+    try:
+        import streamlit.web.bootstrap as bootstrap
+        # Get the current URL from query params or session
+        query_params = st.query_params
+        # If we have a session, we might be on experiment
+        # Check if hostname contains 'experiment'
+        hostname = os.getenv("HOSTNAME", "")
+        if "experiment" in hostname.lower():
+            return True
+    except:
+        pass
+    
+    # Fallback: check if the app URL contains 'experiment'
+    # This env var is set by Streamlit Cloud
+    streamlit_url = os.getenv("STREAMLIT_URL", "")
+    if "experiment" in streamlit_url.lower():
+        return True
+    
+    return False
+
+
 def validate_email(email: str) -> bool:
     """
     Validate email format. Accepts standard formats including plus addressing.
@@ -230,10 +265,10 @@ def signup(email: str, password: str, display_name: str = ""):
         return {"success": False, "error": error}
     
     try:
-        # In dev mode, use admin API to bypass Supabase rate limiting
-        if is_dev_mode():
-            logger.info(f"SIGNUP - DEV_MODE detected - using admin API")
-            print(f"[SIGNUP] DEV_MODE detected - using admin API")
+        # In test/experiment environments, use admin API to bypass email confirmation and rate limiting
+        if is_test_environment():
+            logger.info(f"SIGNUP - Test environment detected - using admin API (no email confirmation)")
+            print(f"[SIGNUP] Test environment detected - using admin API (no email confirmation)")
             sb_admin = get_supabase_admin()
             if sb_admin:
                 try:
@@ -260,7 +295,7 @@ def signup(email: str, password: str, display_name: str = ""):
                             "success": True,
                             "user_id": result.user.id,
                             "email": email,
-                            "dev_mode": True
+                            "test_mode": True  # Email auto-confirmed
                         }
                 except Exception as e:
                     # If admin API fails, fall back to regular signup
@@ -649,8 +684,8 @@ def page_auth():
                     else:
                         result = signup(email, password, name)
                         if result["success"]:
-                            if result.get("dev_mode"):
-                                st.success("✅ Account created! You can log in immediately (dev mode).")
+                            if result.get("test_mode"):
+                                st.success("✅ Account created! You can log in immediately.")
                             else:
                                 st.success("✅ Account created! Check your email to confirm, then log in.")
                         else:
