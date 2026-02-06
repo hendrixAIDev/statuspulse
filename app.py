@@ -16,6 +16,7 @@ import re
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
+from error_handler import ErrorHandler
 
 # Setup logging to file
 logging.basicConfig(
@@ -27,6 +28,9 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Initialize error handler for standardized error handling
+error_handler = ErrorHandler("StatusPulse")
 
 # Load .env file explicitly
 load_dotenv()
@@ -327,14 +331,25 @@ def signup(email: str, password: str, display_name: str = ""):
         
     except Exception as e:
         error_msg = str(e)
-        # Make rate limit errors more user-friendly
+        # Handle specific known errors with user-friendly messages
         if "rate" in error_msg.lower() or "too many" in error_msg.lower():
             if is_dev_mode():
-                return {"success": False, "error": "Rate limit hit even in dev mode. This is a Supabase limitation. Try the seed script instead: python seed_test_accounts.py"}
+                return {"success": False, "error": "Rate limit hit. Try the seed script: python seed_test_accounts.py"}
             return {"success": False, "error": "Too many signup attempts. Please wait a few minutes and try again."}
         if "already registered" in error_msg.lower() or "duplicate" in error_msg.lower():
             return {"success": False, "error": "Email already registered. Try logging in instead."}
-        return {"success": False, "error": error_msg}
+        
+        # Use standardized error handler for unknown errors
+        error_response = error_handler.handle(
+            error=e,
+            category="AUTH",
+            context={"email": email, "action": "signup"}
+        )
+        return {
+            "success": False, 
+            "error": error_response["message"],
+            "error_code": error_response["error_code"]
+        }
 
 
 def login(email: str, password: str):
@@ -366,7 +381,24 @@ def login(email: str, password: str):
         error_msg = str(e)
         logger.error(f"LOGIN - Login error: {error_msg}")
         print(f"[LOGIN] Login error: {error_msg}")
-        return {"success": False, "error": error_msg}
+        
+        # Handle known errors with friendly messages
+        if "invalid" in error_msg.lower() and "credentials" in error_msg.lower():
+            return {"success": False, "error": "Invalid email or password. Please try again."}
+        if "email not confirmed" in error_msg.lower():
+            return {"success": False, "error": "Please confirm your email before logging in. Check your inbox."}
+        
+        # Use standardized error handler for unknown errors
+        error_response = error_handler.handle(
+            error=e,
+            category="AUTH",
+            context={"email": email, "action": "login"}
+        )
+        return {
+            "success": False,
+            "error": error_response["message"],
+            "error_code": error_response["error_code"]
+        }
 
 
 # ─── Data Functions ──────────────────────────────────────────────────────────
@@ -656,7 +688,10 @@ def page_auth():
                         st.success("Welcome back! 🎉")
                         st.rerun()
                     else:
-                        st.error(f"Login failed: {result['error']}")
+                        error_msg = f"❌ {result['error']}"
+                        if result.get("error_code"):
+                            error_msg += f"\n\n**Error Code:** `{result['error_code']}`\n\n_If this persists, report this code to support._"
+                        st.error(error_msg)
         
         with tab_signup:
             # Show dev mode indicator
@@ -689,7 +724,10 @@ def page_auth():
                             else:
                                 st.success("✅ Account created! Check your email to confirm, then log in.")
                         else:
-                            st.error(f"Signup failed: {result['error']}")
+                            error_msg = f"❌ {result['error']}"
+                            if result.get("error_code"):
+                                error_msg += f"\n\n**Error Code:** `{result['error_code']}`\n\n_If this persists, report this code to support._"
+                            st.error(error_msg)
         
         st.markdown("""
         <div style="text-align:center; padding: 30px 0; color: #9CA3AF; font-size: 0.85rem;">
