@@ -351,10 +351,10 @@ def add_monitor(user_id: str, name: str, url: str, method: str = "GET",
     profile = sb.table("profiles").select("max_monitors, plan").eq("id", user_id).single().execute()
     current_count = len(get_monitors(user_id))
     
-    if current_count >= (profile.data or {}).get("max_monitors", 3):
+    if current_count >= (profile.data or {}).get("max_monitors", 5):  # Temporarily increased from 3
         plan = (profile.data or {}).get("plan", "free")
         if plan == "free":
-            return {"success": False, "error": "Free tier limit reached (3 monitors). Upgrade to Pro for unlimited."}
+            return {"success": False, "error": "Free tier limit reached (5 monitors). Upgrade to Pro for unlimited."}
         return {"success": False, "error": "Monitor limit reached."}
     
     # Validate URL
