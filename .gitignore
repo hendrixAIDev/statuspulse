@@ -9,3 +9,5 @@ build/
 .DS_Store
 worker/node_modules/
 worker/node_modules/.cache/
+*.log
+statuspulse_debug.log

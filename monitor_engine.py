@@ -1,6 +1,7 @@
 """
 StatusPulse - Core Monitoring Engine
 Runs checks against monitored URLs and stores results in Supabase.
+Supports both URL checks and SCHP capability checks.
 Can run standalone (cron/scheduler) or be imported by the Streamlit app.
 """
 
@@ -11,9 +12,11 @@ import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Dict, Any
 import os
 import json
+
+from schp_client import SCHPClient
 
 
 class MonitorEngine:
@@ -79,6 +82,63 @@ class MonitorEngine:
                    expected_status: int = 200, timeout: int = 30) -> dict:
         """Synchronous wrapper for check_url."""
         return asyncio.run(self.check_url(url, method, expected_status, timeout))
+    
+    # ─── SCHP Capability Checking ────────────────────────────────────────────────
+    
+    async def check_capabilities(self, url: str, timeout: int = 30) -> dict:
+        """
+        Check capabilities via SCHP endpoint.
+        
+        Returns dict with:
+        - url: The capabilities URL
+        - is_up: True if all capabilities are ok
+        - status: 'operational', 'degraded', or 'down'
+        - capabilities: Dict of capability statuses
+        - failed_capabilities: List of failed capability names
+        - response_time_ms: Response time
+        - error_message: Error if fetch failed
+        - checked_at: Timestamp
+        """
+        schp = SCHPClient(timeout=timeout)
+        result = await schp.fetch_capabilities(url)
+        
+        check_result = {
+            "url": result["url"],
+            "is_up": False,
+            "status": "unknown",
+            "capabilities": {},
+            "failed_capabilities": [],
+            "response_time_ms": result["response_time_ms"],
+            "error_message": result["error"],
+            "checked_at": result["fetched_at"]
+        }
+        
+        if result["success"] and result["data"]:
+            data = result["data"]
+            check_result["status"] = schp.get_overall_status(data)
+            check_result["capabilities"] = data.get("capabilities", {})
+            check_result["failed_capabilities"] = schp.get_failed_capabilities(data)
+            check_result["is_up"] = check_result["status"] == "operational"
+        
+        return check_result
+    
+    def run_capability_check(self, url: str, timeout: int = 30) -> dict:
+        """Synchronous wrapper for check_capabilities."""
+        return asyncio.run(self.check_capabilities(url, timeout))
+    
+    def save_capability_check_result(self, monitor_id: str, result: dict):
+        """Save capability check result to Supabase."""
+        self.supabase.table("checks").insert({
+            "monitor_id": monitor_id,
+            "status_code": 200 if result["is_up"] else 503,  # Synthetic status
+            "response_time_ms": result["response_time_ms"],
+            "is_up": result["is_up"],
+            "error_message": result["error_message"] or (
+                f"Degraded: {', '.join(result['failed_capabilities'])}" 
+                if result["failed_capabilities"] else None
+            ),
+            "checked_at": result["checked_at"]
+        }).execute()
     
     def save_check_result(self, monitor_id: str, result: dict):
         """Save check result to Supabase."""
